@@ -1,20 +1,24 @@
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  background: #000;
-  overflow: hidden;
+* {
+  box-sizing: border-box;
 }
 
-#webcam, #overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #000000;
+}
+
+#webcam,
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: block;
   width: 100vw;
   height: 100vh;
   object-fit: cover;
-  display: block;
 }
 
 #overlay {
