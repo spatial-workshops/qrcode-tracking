@@ -27,6 +27,11 @@ const SELECT_DISTANCE = 50;
 // detection or a jittery fingertip) is not announced again when it returns.
 const REANNOUNCE_MS = 1500;
 
+// QR codes whose contents start with this prefix mark the corners of a zone;
+// the rest of the contents is the zone's identifier.
+const ZONE_PREFIX = 'zone:';
+const MIN_ZONE_CORNERS = 3;
+
 // QR contents -> last time (ms) that code was selected.
 const lastSelectedAt = new Map();
 
@@ -115,6 +120,10 @@ function render() {
     y: landmarks[INDEX_FINGER_TIP].y * overlay.height,
   }));
 
+  for (const [id, corners] of findZones(barcodes)) {
+    drawZone(id, corners);
+  }
+
   for (const barcode of barcodes) {
     const location = toLocation(barcode.cornerPoints);
     if (fingertips.some((tip) => isNear(tip, barcode.cornerPoints, SELECT_DISTANCE))) {
@@ -127,6 +136,44 @@ function render() {
   for (const landmarks of hands) {
     drawHand(landmarks);
   }
+}
+
+// Groups zone QR codes by identifier and returns a Map of id -> polygon, using
+// each code's center as a corner. Detection order is arbitrary, so corners are
+// sorted clockwise around their centroid. Zones with too few visible corners
+// are left out.
+function findZones(barcodes) {
+  const groups = new Map();
+  for (const barcode of barcodes) {
+    if (!barcode.rawValue.startsWith(ZONE_PREFIX)) {
+      continue;
+    }
+    const id = barcode.rawValue.slice(ZONE_PREFIX.length);
+    if (!groups.has(id)) {
+      groups.set(id, []);
+    }
+    groups.get(id).push(centroid(barcode.cornerPoints));
+  }
+
+  const zones = new Map();
+  for (const [id, corners] of groups) {
+    if (corners.length >= MIN_ZONE_CORNERS) {
+      zones.set(id, sortClockwise(corners));
+    }
+  }
+  return zones;
+}
+
+function centroid(points) {
+  const sum = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+  return { x: sum.x / points.length, y: sum.y / points.length };
+}
+
+// With y pointing down on screen, increasing atan2 angle runs clockwise.
+function sortClockwise(points) {
+  const center = centroid(points);
+  const angle = (p) => Math.atan2(p.y - center.y, p.x - center.x);
+  return [...points].sort((a, b) => angle(a) - angle(b));
 }
 
 // cornerPoints are ordered top-left, top-right, bottom-right, bottom-left.
@@ -239,3 +286,25 @@ function unlockSpeech() {
 }
 window.addEventListener('pointerdown', unlockSpeech, { once: true });
 window.addEventListener('keydown', unlockSpeech, { once: true });
+
+function drawZone(id, corners) {
+  overlayCtx.strokeStyle = '#ffff00';
+  overlayCtx.lineWidth = Math.max(4, overlay.width * 0.004);
+  overlayCtx.lineJoin = 'round';
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(corners[0].x, corners[0].y);
+  for (const corner of corners.slice(1)) {
+    overlayCtx.lineTo(corner.x, corner.y);
+  }
+  overlayCtx.closePath();
+  overlayCtx.stroke();
+
+  const center = centroid(corners);
+  const fontSize = Math.max(16, overlay.width * 0.02);
+  overlayCtx.font = `${fontSize}px monospace`;
+  overlayCtx.textAlign = 'center';
+  overlayCtx.textBaseline = 'middle';
+  overlayCtx.fillStyle = '#ffff00';
+  overlayCtx.fillText(id, center.x, center.y);
+  overlayCtx.textAlign = 'start';
+}
