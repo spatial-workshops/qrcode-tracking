@@ -16,6 +16,15 @@ const VIDEO_CONSTRAINTS = {
 // fall back to the zxing-wasm based polyfill.
 const POLYFILL_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@3.2.2/+esm';
 
+// QR codes are detected on a copy of the frame scaled down to this width.
+// Detection time grows with pixel count, so this is the main speed knob:
+// lower is faster but misses smaller (more distant) codes.
+const DETECT_WIDTH = 960;
+const detectCanvas = document.createElement('canvas');
+const detectCtx = detectCanvas.getContext('2d');
+// detectCanvas pixels per video pixel.
+let detectScale = 1;
+
 const MEDIAPIPE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21';
 const HAND_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const MAX_HANDS = 2;
@@ -83,6 +92,10 @@ video.addEventListener('loadedmetadata', async () => {
   overlay.width = video.videoWidth;
   overlay.height = video.videoHeight;
 
+  detectScale = Math.min(1, DETECT_WIDTH / video.videoWidth);
+  detectCanvas.width = Math.round(video.videoWidth * detectScale);
+  detectCanvas.height = Math.round(video.videoHeight * detectScale);
+
   detector = await createDetector();
   requestAnimationFrame(tick);
 
@@ -92,25 +105,37 @@ video.addEventListener('loadedmetadata', async () => {
 });
 
 function tick() {
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+  // Both trackers only need to run once per new camera frame; the display
+  // often refreshes faster than the camera delivers frames.
+  if (video.readyState === video.HAVE_ENOUGH_DATA && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+
     // Detection is async; skip frames while one is in flight rather than queue.
     if (!isDetecting) {
       isDetecting = true;
-      detector.detect(video)
-        .then((results) => { barcodes = results; })
+      detectCtx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
+      detector.detect(detectCanvas)
+        .then((results) => { barcodes = results.map(toVideoCoordinates); })
         .catch((error) => console.error('Detection failed:', error))
         .finally(() => { isDetecting = false; });
     }
 
-    // Hand detection is synchronous and only needs to run once per new frame.
-    if (handLandmarker && video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
+    // Hand detection is synchronous.
+    if (handLandmarker) {
       hands = handLandmarker.detectForVideo(video, performance.now()).landmarks;
     }
   }
 
   render();
   requestAnimationFrame(tick);
+}
+
+// Maps a barcode detected on detectCanvas back to video frame coordinates.
+function toVideoCoordinates({ rawValue, cornerPoints }) {
+  return {
+    rawValue,
+    cornerPoints: cornerPoints.map((p) => ({ x: p.x / detectScale, y: p.y / detectScale })),
+  };
 }
 
 function render() {
