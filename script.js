@@ -23,17 +23,14 @@ const INDEX_FINGER_TIP = 8;
 // A QR code is selected when an index fingertip is within this many pixels
 // (in video frame coordinates) of it.
 const SELECT_DISTANCE = 50;
-// A code that drops out of selection for less than this long (a missed
-// detection or a jittery fingertip) is not announced again when it returns.
-const REANNOUNCE_MS = 1500;
 
 // QR codes whose contents start with this prefix mark the corners of a zone;
 // the rest of the contents is the zone's identifier.
 const ZONE_PREFIX = 'zone:';
 const MIN_ZONE_CORNERS = 3;
-
-// QR contents -> last time (ms) that code was selected.
-const lastSelectedAt = new Map();
+// QR codes whose contents start with this prefix cast a ray from their top
+// edge in the direction the code is facing "up", out to the edge of the frame.
+const RAY_PREFIX = 'ray:';
 
 let detector;
 let isDetecting = false;
@@ -125,10 +122,15 @@ function render() {
   }
 
   for (const barcode of barcodes) {
+    if (barcode.rawValue.startsWith(RAY_PREFIX)) {
+      drawRay(barcode.cornerPoints);
+    }
+  }
+
+  for (const barcode of barcodes) {
     const location = toLocation(barcode.cornerPoints);
     if (fingertips.some((tip) => isNear(tip, barcode.cornerPoints, SELECT_DISTANCE))) {
       fillQuad(barcode.cornerPoints);
-      announce(barcode.rawValue);
     }
     drawBox(location);
     drawLabel(location, barcode.rawValue);
@@ -270,41 +272,42 @@ function fillQuad(points) {
   overlayCtx.fill();
 }
 
-function announce(text) {
-  const now = performance.now();
-  const last = lastSelectedAt.get(text);
-  lastSelectedAt.set(text, now);
-  if (last === undefined || now - last > REANNOUNCE_MS) {
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+
+// The ray starts at the middle of the code's top edge and points away from the
+// middle of its bottom edge, so it follows the code's rotation in the frame.
+function drawRay([topLeft, topRight, bottomRight, bottomLeft]) {
+  const start = midpoint(topLeft, topRight);
+  const bottom = midpoint(bottomLeft, bottomRight);
+  const end = rayToFrameEdge(start, { x: start.x - bottom.x, y: start.y - bottom.y });
+  if (!end) {
+    return;
   }
-}
 
-// Browsers only allow speech after the user has interacted with the page, and
-// camera permission doesn't count, so prime it on the first tap or keypress.
-function unlockSpeech() {
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
-}
-window.addEventListener('pointerdown', unlockSpeech, { once: true });
-window.addEventListener('keydown', unlockSpeech, { once: true });
-
-function drawZone(id, corners) {
-  overlayCtx.strokeStyle = '#ffff00';
+  overlayCtx.strokeStyle = '#00ffff';
   overlayCtx.lineWidth = Math.max(4, overlay.width * 0.004);
-  overlayCtx.lineJoin = 'round';
+  overlayCtx.lineCap = 'round';
   overlayCtx.beginPath();
-  overlayCtx.moveTo(corners[0].x, corners[0].y);
-  for (const corner of corners.slice(1)) {
-    overlayCtx.lineTo(corner.x, corner.y);
-  }
-  overlayCtx.closePath();
+  overlayCtx.moveTo(start.x, start.y);
+  overlayCtx.lineTo(end.x, end.y);
   overlayCtx.stroke();
+}
 
-  const center = centroid(corners);
-  const fontSize = Math.max(16, overlay.width * 0.02);
-  overlayCtx.font = `${fontSize}px monospace`;
-  overlayCtx.textAlign = 'center';
-  overlayCtx.textBaseline = 'middle';
-  overlayCtx.fillStyle = '#ffff00';
-  overlayCtx.fillText(id, center.x, center.y);
-  overlayCtx.textAlign = 'start';
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+// Where a ray from `origin` along `direction` leaves the overlay, or null if
+// the direction is degenerate.
+function rayToFrameEdge(origin, direction) {
+  const distances = [];
+  if (direction.x > 0) distances.push((overlay.width - origin.x) / direction.x);
+  if (direction.x < 0) distances.push(-origin.x / direction.x);
+  if (direction.y > 0) distances.push((overlay.height - origin.y) / direction.y);
+  if (direction.y < 0) distances.push(-origin.y / direction.y);
+  if (distances.length === 0) {
+    return null;
+  }
+
+  const t = Math.max(0, Math.min(...distances));
+  return { x: origin.x + direction.x * t, y: origin.y + direction.y * t };
 }
