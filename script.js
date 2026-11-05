@@ -272,7 +272,6 @@ function fillQuad(points) {
   overlayCtx.fill();
 }
 
-
 // The ray starts at the middle of the code's top edge and points away from the
 // middle of its bottom edge, so it follows the code's rotation in the frame.
 function drawRay([topLeft, topRight, bottomRight, bottomLeft]) {
